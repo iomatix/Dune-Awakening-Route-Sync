@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0.0",
+  "vm_ip": "",
+  "pc_ip": "",
+  "vm_user": "dune",
+  "switch_name": "vEthernet (DuneAwakeningServerSwitch)"
+}
