@@ -1,6 +1,8 @@
 /*
 
 !.gitignore
-!Update-DuneRoute.ps1
+!Setup-DuneHost.bat
+!Initialize-DuneHost.ps1
 !Run-DuneRoute.bat
+!Update-DuneRoute.ps1
 !config.json
