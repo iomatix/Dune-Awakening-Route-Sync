@@ -1,0 +1,7 @@
+# Ignoruj wszystko w repozytorium domyślnie
+/*
+
+# Zezwól wyłącznie na plik .gitignore oraz oba skrypty narzędziowe
+!.gitignore
+!Update-DuneRoute.ps1
+!Run-DuneRoute.bat
