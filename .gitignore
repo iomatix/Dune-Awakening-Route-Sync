@@ -11,7 +11,7 @@
 !test_dune_net.py
 
 # 4. Whitelist batch execution runners
-!dune_runner.bat
+!run_dune_net.bat
 !run_tests.bat
 
 # 5. Explicitly ignore Python runtime artifacts in case of subfolder inclusions

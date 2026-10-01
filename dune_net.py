@@ -1,6 +1,6 @@
 """
-Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.1.2)
-Self-contained, deterministic topology and firewall management with ANSI colors and crash guard.
+Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.2.0)
+Self-contained, deterministic topology, Hyper-V lifecycle handling, and readiness polling.
 """
 
 import argparse
@@ -10,12 +10,12 @@ import os
 import socket
 import subprocess
 import sys
+import time
 import traceback
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-# Enable Virtual Terminal Processing for ANSI colors on Windows console
 if sys.platform == "win32":
     try:
         import ctypes
@@ -44,7 +44,7 @@ def print_success(msg: str):
 
 
 def print_warning(msg: str):
-    print(f"{Color.YELLOW}[!] WARNING: {msg}{Color.RESET}")
+    print(f"{Color.YELLOW}[!] {msg}{Color.RESET}")
 
 
 def print_error(msg: str):
@@ -64,11 +64,54 @@ class TopologyContext:
     node_tcp_ports: str
 
 
+class VmLifecycleManager:
+    @staticmethod
+    def get_vm_state() -> Tuple[Optional[str], Optional[str]]:
+        """Queries Hyper-V subsystem for VM Name and State."""
+        ps_cmd = (
+            "Get-VM -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.Name -like '*Dune*' -or $_.NetworkAdapters.SwitchName -like '*Dune*' } | "
+            "Select-Object -First 1 Name, State | ConvertTo-Json"
+        )
+        data = NetworkDiscovery.run_powershell_json(ps_cmd)
+        if data and isinstance(data, dict):
+            return data.get("Name"), str(data.get("State", "")).strip()
+        return None, None
+
+    @classmethod
+    def handle_offline_vm(cls, vm_name: Optional[str], state: Optional[str]) -> bool:
+        """Guides user when VM is not running and offers to launch battlegroup.bat."""
+        name_str = vm_name or "Dune Awakening Dedicated Server"
+        state_str = state or "Off"
+
+        print_warning(f"Virtual Machine '{name_str}' is NOT running (State: {state_str}).")
+        print(f"\n{Color.CYAN}Required Actions in Battlegroup CLI:{Color.RESET}")
+        print("  1. Start the VM using option: 'b. start-vm'")
+        print("  2. If Public IP changed, update it using: '8. change-battlegroup-ip'")
+        print("  3. Start the game server using: '2. start'")
+        print(f"  {Color.GRAY}* Note: If players cannot see server, verify updates using: '5. update'{Color.RESET}\n")
+
+        battlegroup_bat = os.path.join(os.path.dirname(os.path.abspath(__file__)), "battlegroup.bat")
+        
+        try:
+            choice = input(f"{Color.CYAN}[?] Launch battlegroup.bat now to manage VM? (Y/N): {Color.RESET}").strip()
+            if choice.lower() == 'y':
+                if os.path.exists(battlegroup_bat):
+                    print_info("Launching battlegroup.bat...")
+                    subprocess.Popen(["cmd.exe", "/c", battlegroup_bat], creationflags=subprocess.CREATE_NEW_CONSOLE)
+                else:
+                    print_error("'battlegroup.bat' was not found in the root directory.")
+        except (KeyboardInterrupt, EOFError):
+            pass
+
+        return False
+
+
 class NetworkDiscovery:
     @staticmethod
     def query_public_ip() -> str:
         url = "https://api.ipify.org"
-        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.2"})
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.read().decode("utf-8").strip()
 
@@ -175,7 +218,28 @@ class NetworkDiscovery:
         return None
 
     @classmethod
-    def build_context(cls, config_path: str) -> TopologyContext:
+    def wait_for_vm_readiness(cls, switch_name: str, host_ip: str, host_net: ipaddress.IPv4Network, timeout_sec: int = 25) -> Optional[str]:
+        """Polls for VM IP and SSH port availability during startup."""
+        print_info("Waiting for VM network initialization and SSH daemon...")
+        start_time = time.time()
+        while time.time() - start_time < timeout_sec:
+            ip = cls.resolve_vm_ip(switch_name, host_ip, host_net)
+            if ip and cls.check_ssh_port(ip):
+                return ip
+            time.sleep(2)
+            sys.stdout.write(".")
+            sys.stdout.flush()
+        print("")
+        return None
+
+    @classmethod
+    def build_context(cls, config_path: str) -> Optional[TopologyContext]:
+        # 1. Inspect Hyper-V State First
+        vm_name, vm_state = VmLifecycleManager.get_vm_state()
+        if vm_state and vm_state.lower() not in ["running", "2"]:
+            VmLifecycleManager.handle_offline_vm(vm_name, vm_state)
+            return None
+
         config: Dict[str, Any] = {}
         if os.path.exists(config_path):
             try:
@@ -197,9 +261,13 @@ class NetworkDiscovery:
 
         host_net = ipaddress.IPv4Network(f"{pc_ip}/{prefix_len}", strict=False)
 
+        # 2. Resolve or wait for VM IP
         vm_ip = configured_vm_ip or cls.resolve_vm_ip(switch_alias, pc_ip, host_net)
+        if not vm_ip or not cls.check_ssh_port(vm_ip):
+            vm_ip = cls.wait_for_vm_readiness(switch_alias, pc_ip, host_net, timeout_sec=20)
+
         if not vm_ip:
-            raise RuntimeError(f"Failed to resolve VM IP on switch '{switch_alias}'. Verify that VM is booted.")
+            raise RuntimeError(f"VM network adapter on switch '{switch_alias}' is unreachable or SSH is offline.")
 
         public_ip = cls.query_public_ip()
 
@@ -375,9 +443,6 @@ class VerificationSuite:
         ))
 
         if sudo_ok:
-            code_ip, lo_dump = ssh.run("ip addr show dev lo")
-            lo_has_public = (code_ip == 0 and f"{ctx.public_ip}/32" in lo_dump)
-           
             code, nat_dump = ssh.run("sudo iptables -t nat -S")
             lines = [l.strip() for l in nat_dump.splitlines()]
 
@@ -434,6 +499,9 @@ def main():
 
     try:
         ctx = NetworkDiscovery.build_context(args.config)
+        if ctx is None:
+            # Clean exit handled by VmLifecycleManager (VM is offline)
+            sys.exit(0)
         print_success(f"Topology: Public IP={ctx.public_ip}, Host PC={ctx.pc_ip}, VM={ctx.vm_ip}, Subnet={ctx.subnet_cidr} (Same Subnet: {ctx.is_same_subnet})")
     except Exception as e:
         print_error(f"Discovery initialization failure: {e}")

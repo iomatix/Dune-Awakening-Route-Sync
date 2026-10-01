@@ -1,6 +1,6 @@
 """
-Dune: Awakening - Automated Test Suite for dune_net.py (Version 2.1.2)
-Unit and Live Integration Tests with ANSI colors and crash guard.
+Dune: Awakening - Automated Test Suite for dune_net.py (Version 2.2.0)
+Unit and Live Integration Tests with ANSI colors and Hyper-V lifecycle validation.
 """
 
 import ipaddress
@@ -9,7 +9,6 @@ import sys
 import unittest
 from typing import List
 
-# Enable Virtual Terminal Processing for ANSI colors on Windows console
 if sys.platform == "win32":
     try:
         import ctypes
@@ -110,6 +109,8 @@ class TestDuneNetLive(unittest.TestCase):
         config_path = os.path.join(os.path.dirname(__file__), "config.json")
         try:
             cls.ctx = dune_net.NetworkDiscovery.build_context(config_path)
+            if cls.ctx is None:
+                raise unittest.SkipTest("Live tests skipped: Hyper-V VM is offline or unmanaged.")
         except Exception as e:
             raise unittest.SkipTest(f"Live tests skipped: Environment discovery failed ({e})")
 
@@ -172,6 +173,4 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"\n{Color.RED}[-] Unhandled exception during testing: {e}{Color.RESET}")
-        import traceback
-        traceback.print_exc()
         sys.exit(1)
