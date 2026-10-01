@@ -1,6 +1,6 @@
 """
-Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.0.3)
-Self-contained, deterministic topology and firewall management without magic values.
+Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.1.2)
+Self-contained, deterministic topology and firewall management with ANSI colors and crash guard.
 """
 
 import argparse
@@ -10,17 +10,45 @@ import os
 import socket
 import subprocess
 import sys
+import traceback
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+# Enable Virtual Terminal Processing for ANSI colors on Windows console
+if sys.platform == "win32":
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
 
-@dataclass
-class PortForwardRule:
-    protocol: str
-    destination_port: str
-    target_ip: str
-    is_multiport: bool = False
+
+class Color:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    GRAY = "\033[90m"
+
+
+def print_info(msg: str):
+    print(f"{Color.CYAN}[*] {msg}{Color.RESET}")
+
+
+def print_success(msg: str):
+    print(f"{Color.GREEN}[+] {msg}{Color.RESET}")
+
+
+def print_warning(msg: str):
+    print(f"{Color.YELLOW}[!] WARNING: {msg}{Color.RESET}")
+
+
+def print_error(msg: str):
+    print(f"{Color.RED}[-] ERROR: {msg}{Color.RESET}")
 
 
 @dataclass
@@ -32,14 +60,15 @@ class TopologyContext:
     switch_alias: str
     is_same_subnet: bool
     subnet_cidr: str
-    rules: List[PortForwardRule]
+    game_udp_ports: str
+    node_tcp_ports: str
 
 
 class NetworkDiscovery:
     @staticmethod
     def query_public_ip() -> str:
         url = "https://api.ipify.org"
-        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.1"})
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.read().decode("utf-8").strip()
 
@@ -56,7 +85,6 @@ class NetworkDiscovery:
 
     @classmethod
     def resolve_host_interface(cls, preferred_switch: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
-        """Resolves switch alias, host IP address, and prefix length dynamically."""
         query = (
             "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
             "Where-Object { $_.InterfaceAlias -notlike '*Loopback*' -and $_.IPAddress -notlike '169.254.*' } | "
@@ -88,7 +116,6 @@ class NetworkDiscovery:
 
     @staticmethod
     def check_ssh_port(ip: str, timeout: float = 0.5) -> bool:
-        """Verifies if an IP responds on SSH port 22."""
         try:
             with socket.create_connection((ip, 22), timeout=timeout):
                 return True
@@ -97,7 +124,6 @@ class NetworkDiscovery:
 
     @classmethod
     def resolve_vm_ip(cls, switch_name: str, host_ip: str, host_net: ipaddress.IPv4Network) -> Optional[str]:
-        """Resolves VM IP through Hyper-V adapter query or filtered unicast ARP neighbors."""
         ps_hyperv = (
             "Get-VMNetworkAdapter -All -ErrorAction SilentlyContinue | "
             "Where-Object { $_.SwitchName -like '*Dune*' -or $_.VMName -like '*Dune*' } | "
@@ -156,7 +182,7 @@ class NetworkDiscovery:
                 with open(config_path, "r", encoding="utf-8-sig") as f:
                     config = json.load(f)
             except Exception as e:
-                print(f"[-] Warning: Failed to parse '{config_path}': {e}. Using runtime discovery.")
+                print_warning(f"Failed to parse '{config_path}': {e}. Using runtime discovery.")
 
         vm_user = config.get("vm_user") or "dune"
         preferred_switch = config.get("switch_name") or ""
@@ -167,13 +193,13 @@ class NetworkDiscovery:
         if configured_pc_ip:
             pc_ip = configured_pc_ip
         if not pc_ip or not prefix_len:
-            raise RuntimeError("CRITICAL: Failed to discover active host IP and network prefix length.")
+            raise RuntimeError("Failed to discover active host IP and network prefix length.")
 
         host_net = ipaddress.IPv4Network(f"{pc_ip}/{prefix_len}", strict=False)
 
         vm_ip = configured_vm_ip or cls.resolve_vm_ip(switch_alias, pc_ip, host_net)
         if not vm_ip:
-            raise RuntimeError(f"CRITICAL: Failed to resolve VM IP on switch '{switch_alias}'. Verify that VM is booted.")
+            raise RuntimeError(f"Failed to resolve VM IP on switch '{switch_alias}'. Verify that VM is booted.")
 
         public_ip = cls.query_public_ip()
 
@@ -184,11 +210,6 @@ class NetworkDiscovery:
         game_ports = config.get("game_udp_ports") or "7777:7810"
         node_ports = config.get("node_tcp_ports") or "30000:32767"
 
-        rules = [
-            PortForwardRule(protocol="udp", destination_port=game_ports, target_ip=vm_ip, is_multiport=True),
-            PortForwardRule(protocol="tcp", destination_port=node_ports, target_ip=vm_ip, is_multiport=False)
-        ]
-
         return TopologyContext(
             public_ip=public_ip,
             vm_ip=vm_ip,
@@ -197,7 +218,8 @@ class NetworkDiscovery:
             switch_alias=switch_alias,
             is_same_subnet=is_same_subnet,
             subnet_cidr=subnet_cidr,
-            rules=rules
+            game_udp_ports=game_ports,
+            node_tcp_ports=node_ports
         )
 
 
@@ -222,7 +244,7 @@ class SshExecutor:
 class RouteManager:
     @staticmethod
     def sync_windows_route(ctx: TopologyContext) -> bool:
-        print("[*] Synchronizing Windows Routing Table...")
+        print_info("Synchronizing Windows Routing Table...")
         ps_query = (
             f"Get-NetRoute -DestinationPrefix '{ctx.public_ip}/32' -ErrorAction SilentlyContinue | "
             "Select-Object DestinationPrefix, NextHop, RouteMetric | ConvertTo-Json"
@@ -236,24 +258,24 @@ class RouteManager:
                 if r.get("NextHop") == ctx.vm_ip and r.get("RouteMetric") == 1:
                     matched = True
                 else:
-                    print(f"[-] Purging invalid route: {r.get('DestinationPrefix')} via {r.get('NextHop')}")
+                    print_warning(f"Purging invalid route: {r.get('DestinationPrefix')} via {r.get('NextHop')}")
                     ps_del = f"Remove-NetRoute -DestinationPrefix '{r.get('DestinationPrefix')}' -NextHop '{r.get('NextHop')}' -Confirm:$false"
                     subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_del], capture_output=True)
 
         if not matched:
-            print(f"[+] Injecting host route: {ctx.public_ip}/32 -> {ctx.vm_ip} (Metric: 1)")
+            print_success(f"Injecting host route: {ctx.public_ip}/32 -> {ctx.vm_ip} (Metric: 1)")
             ps_add = f"New-NetRoute -DestinationPrefix '{ctx.public_ip}/32' -InterfaceAlias '{ctx.switch_alias}' -NextHop '{ctx.vm_ip}' -RouteMetric 1"
             res = subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_add], capture_output=True, text=True)
             if res.returncode != 0:
-                print(f"[-] Failed to add Windows route: {res.stderr.strip()}")
+                print_error(f"Failed to add Windows route: {res.stderr.strip()}")
                 return False
         else:
-            print(f"[+] Route already active and verified: {ctx.public_ip}/32 -> {ctx.vm_ip} (Metric: 1)")
+            print_success(f"Route already active and verified: {ctx.public_ip}/32 -> {ctx.vm_ip} (Metric: 1)")
         return True
 
     @staticmethod
     def clean_windows_route(ctx: TopologyContext):
-        print(f"[*] Removing static routes for {ctx.public_ip}/32...")
+        print_info(f"Removing static routes for {ctx.public_ip}/32...")
         ps_del = f"Get-NetRoute -DestinationPrefix '{ctx.public_ip}/32' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false"
         subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_del], capture_output=True)
 
@@ -264,11 +286,11 @@ class LinuxNatManager:
         self.ssh = SshExecutor(ctx.vm_user, ctx.vm_ip)
 
     def sanitize_and_sync(self) -> bool:
-        print(f"[*] Sanitizing iptables and applying network policy on VM ({self.ctx.vm_ip})...")
+        print_info(f"Sanitizing iptables and applying network policy on VM ({self.ctx.vm_ip})...")
 
         code, dump = self.ssh.run("sudo iptables -t nat -S")
         if code != 0:
-            print(f"[-] SSH connection failed: {dump}")
+            print_error(f"SSH connection failed: {dump}")
             return False
 
         cleanup_commands: List[str] = []
@@ -279,40 +301,35 @@ class LinuxNatManager:
                     cleanup_commands.append(f"sudo iptables -t nat -D {line[3:]}")
 
         chain_commands = [
-            f"sudo ip addr del {self.ctx.public_ip}/32 dev lo 2>/dev/null || true",
             "sudo iptables -t nat -N DUNE-NAT 2>/dev/null || true",
             "sudo iptables -t nat -F DUNE-NAT",
             "sudo iptables -t nat -C PREROUTING -j DUNE-NAT 2>/dev/null || sudo iptables -t nat -I PREROUTING 1 -j DUNE-NAT",
             "sudo iptables -t nat -N DUNE-POST 2>/dev/null || true",
             "sudo iptables -t nat -F DUNE-POST",
-            "sudo iptables -t nat -C POSTROUTING -j DUNE-POST 2>/dev/null || sudo iptables -t nat -I POSTROUTING 1 -j DUNE-POST"
+            "sudo iptables -t nat -C POSTROUTING -j DUNE-POST 2>/dev/null || sudo iptables -t nat -I POSTROUTING 1 -j DUNE-POST",
+            f"sudo iptables -t nat -A DUNE-NAT -d {self.ctx.public_ip} -p udp -m multiport --dports {self.ctx.game_udp_ports} -j DNAT --to-destination {self.ctx.vm_ip}"
         ]
 
-        for rule in self.ctx.rules:
-            port_match = f"-m multiport --dports {rule.destination_port}" if rule.is_multiport else f"--dport {rule.destination_port}"
-            chain_commands.append(
-                f"sudo iptables -t nat -A DUNE-NAT -d {self.ctx.public_ip} -p {rule.protocol} {port_match} -j DNAT --to-destination {rule.target_ip}"
-            )
-
-        # Scoped Hairpin SNAT via RETURN guard rule
         if self.ctx.is_same_subnet:
-            print(f"[+] L2 topology detected ({self.ctx.subnet_cidr}). Injecting self-loopback protected SNAT.")
+            print_success(f"L2 topology detected ({self.ctx.subnet_cidr}). Injecting self-loopback protected UDP SNAT.")
             chain_commands.append(f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.vm_ip} -j RETURN")
-            chain_commands.append(f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.subnet_cidr} -d {self.ctx.vm_ip} -j MASQUERADE")
+            chain_commands.append(
+                f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.subnet_cidr} -d {self.ctx.vm_ip} -p udp -m multiport --dports {self.ctx.game_udp_ports} -j MASQUERADE"
+            )
         else:
-            print(f"[+] L3 routed topology detected (Host {self.ctx.pc_ip} outside VM subnet {self.ctx.subnet_cidr}). Hairpin SNAT omitted.")
+            print_info(f"L3 routed topology detected (Host {self.ctx.pc_ip} outside VM subnet {self.ctx.subnet_cidr}). Hairpin SNAT omitted.")
 
         full_script = " && ".join(cleanup_commands + chain_commands)
         ret, output = self.ssh.run(full_script)
         if ret == 0:
-            print("[+] Kernel NAT rules applied successfully.")
+            print_success("Kernel network policy applied successfully.")
             return True
         else:
-            print(f"[-] Execution error on VM: {output}")
+            print_error(f"Execution error on VM: {output}")
             return False
 
     def clean(self) -> bool:
-        print("[*] Flushing Dune NAT rules from VM...")
+        print_info("Flushing Dune NAT rules from VM...")
         cmd = (
             "sudo iptables -t nat -D PREROUTING -j DUNE-NAT 2>/dev/null || true && "
             "sudo iptables -t nat -F DUNE-NAT 2>/dev/null || true && "
@@ -328,13 +345,12 @@ class LinuxNatManager:
 class VerificationSuite:
     @staticmethod
     def verify(ctx: TopologyContext) -> bool:
-        print("\n===================================================")
-        print("  Dune: Awakening - Verification Suite (English)   ")
-        print("===================================================\n")
+        print(f"\n{Color.CYAN}==================================================={Color.RESET}")
+        print(f"{Color.CYAN}  Dune: Awakening - Verification Suite (English)   {Color.RESET}")
+        print(f"{Color.CYAN}==================================================={Color.RESET}\n")
 
         assertions: List[Tuple[str, str, bool, str]] = []
 
-        # 1. Routing Table Assertion
         ps_query = (
             f"Get-NetRoute -DestinationPrefix '{ctx.public_ip}/32' -InterfaceAlias '{ctx.switch_alias}' "
             "-ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq '" + ctx.vm_ip + "' -and $_.RouteMetric -eq 1 } | "
@@ -348,7 +364,6 @@ class VerificationSuite:
             f"Active on {ctx.switch_alias}" if route_ok else "Route missing or attributes mismatched"
         ))
 
-        # 2. SSH Passwordless Sudo Assertion
         ssh = SshExecutor(ctx.vm_user, ctx.vm_ip)
         code, out = ssh.run("sudo iptables -V")
         sudo_ok = (code == 0 and "iptables" in out)
@@ -359,8 +374,10 @@ class VerificationSuite:
             out.strip() if sudo_ok else "SSH access or sudo authentication failed"
         ))
 
-        # 3. Kernel NAT Policy Assertions
         if sudo_ok:
+            code_ip, lo_dump = ssh.run("ip addr show dev lo")
+            lo_has_public = (code_ip == 0 and f"{ctx.public_ip}/32" in lo_dump)
+           
             code, nat_dump = ssh.run("sudo iptables -t nat -S")
             lines = [l.strip() for l in nat_dump.splitlines()]
 
@@ -369,42 +386,43 @@ class VerificationSuite:
             assertions.append(("iptables PREROUTING", "Chain hook: PREROUTING -> DUNE-NAT", hook_pre, "Hook present" if hook_pre else "Missing hook"))
             assertions.append(("iptables POSTROUTING", "Chain hook: POSTROUTING -> DUNE-POST", hook_post, "Hook present" if hook_post else "Missing hook"))
 
-            for rule in ctx.rules:
-                dnat_match = any(
-                    "-A DUNE-NAT" in l and f"-d {ctx.public_ip}" in l and f"-p {rule.protocol}" in l and rule.destination_port in l and f"--to-destination {rule.target_ip}" in l
-                    for l in lines
-                )
-                assertions.append((
-                    "iptables DNAT",
-                    f"Forward {rule.protocol.upper()} {rule.destination_port} to {rule.target_ip}",
-                    dnat_match,
-                    "Rule verified" if dnat_match else "Rule missing or parameters mismatched"
-                ))
+            dnat_match = any(
+                "-A DUNE-NAT" in l and f"-d {ctx.public_ip}" in l and "-p udp" in l and ctx.game_udp_ports in l and f"--to-destination {ctx.vm_ip}" in l
+                for l in lines
+            )
+            assertions.append((
+                "iptables DNAT",
+                f"Forward UDP {ctx.game_udp_ports} to {ctx.vm_ip}",
+                dnat_match,
+                "Rule verified" if dnat_match else "Rule missing or parameters mismatched"
+            ))
 
             if ctx.is_same_subnet:
                 return_rule = any(f"-A DUNE-POST -s {ctx.vm_ip}/32 -j RETURN" in l or f"-A DUNE-POST -s {ctx.vm_ip} -j RETURN" in l for l in lines)
-                masq_rule = any("-A DUNE-POST" in l and f"-s {ctx.subnet_cidr}" in l and f"-d {ctx.vm_ip}" in l and "-j MASQUERADE" in l for l in lines)
+                masq_rule = any("-A DUNE-POST" in l and f"-s {ctx.subnet_cidr}" in l and f"-d {ctx.vm_ip}" in l and "-p udp" in l and "-j MASQUERADE" in l for l in lines)
                 snat_ok = return_rule and masq_rule
-                assertions.append(("iptables Hairpin", "Scoped L2 SNAT (RETURN Guard & MASQUERADE)", snat_ok, "Rules verified" if snat_ok else "Missing guard or MASQUERADE rule"))
+                assertions.append(("iptables Hairpin", "Scoped UDP SNAT (RETURN Guard & MASQUERADE)", snat_ok, "Rules verified" if snat_ok else "Missing guard or MASQUERADE rule"))
             else:
                 assertions.append(("iptables Hairpin", "Bypass L2 SNAT (Routed L3 topology)", True, "Omitted intentionally"))
 
         failures = 0
         for component, test, success, details in assertions:
-            status = "PASS" if success else "FAIL"
-            if not success:
+            if success:
+                tag = f"{Color.GREEN}[PASS]{Color.RESET}"
+            else:
+                tag = f"{Color.RED}[FAIL]{Color.RESET}"
                 failures += 1
-            print(f"[{status}] {component} :: {test}")
-            print(f"       Details: {details}")
+            print(f"{tag} {component} :: {test}")
+            print(f"       Details: {Color.GRAY}{details}{Color.RESET}")
 
-        print("\n===================================================")
+        print(f"\n{Color.CYAN}==================================================={Color.RESET}")
         if failures == 0:
-            print("  STATUS: CONSISTENT (All verification checks passed)")
-            print("===================================================\n")
+            print(f"  STATUS: {Color.GREEN}CONSISTENT (All verification checks passed){Color.RESET}")
+            print(f"{Color.CYAN}==================================================={Color.RESET}\n")
             return True
         else:
-            print(f"  STATUS: INCONSISTENT ({failures} assertion failures)")
-            print("===================================================\n")
+            print(f"  STATUS: {Color.RED}INCONSISTENT ({failures} assertion failures){Color.RESET}")
+            print(f"{Color.CYAN}==================================================={Color.RESET}\n")
             return False
 
 
@@ -416,9 +434,9 @@ def main():
 
     try:
         ctx = NetworkDiscovery.build_context(args.config)
-        print(f"[+] Topology: Public IP={ctx.public_ip}, Host PC={ctx.pc_ip}, VM={ctx.vm_ip}, Subnet={ctx.subnet_cidr} (Same Subnet: {ctx.is_same_subnet})")
+        print_success(f"Topology: Public IP={ctx.public_ip}, Host PC={ctx.pc_ip}, VM={ctx.vm_ip}, Subnet={ctx.subnet_cidr} (Same Subnet: {ctx.is_same_subnet})")
     except Exception as e:
-        print(f"[-] Discovery initialization failure: {e}")
+        print_error(f"Discovery initialization failure: {e}")
         sys.exit(1)
 
     nat_mgr = LinuxNatManager(ctx)
@@ -427,7 +445,7 @@ def main():
         w_ok = RouteManager.sync_windows_route(ctx)
         l_ok = nat_mgr.sanitize_and_sync()
         if w_ok and l_ok:
-            print("\n[SUCCESS] Synchronization complete.")
+            print(f"\n{Color.GREEN}[SUCCESS] Synchronization complete.{Color.RESET}")
             sys.exit(0)
         sys.exit(1)
 
@@ -438,9 +456,14 @@ def main():
     elif args.action == "clean":
         RouteManager.clean_windows_route(ctx)
         nat_mgr.clean()
-        print("\n[SUCCESS] Environment cleaned.")
+        print(f"\n{Color.GREEN}[SUCCESS] Environment cleaned.{Color.RESET}")
         sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print_error(f"Unhandled Python exception: {e}")
+        traceback.print_exc()
+        sys.exit(1)

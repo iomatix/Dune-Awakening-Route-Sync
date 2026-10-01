@@ -1,21 +1,65 @@
 """
-Dune: Awakening - Automated Test Suite for dune_net.py
-Unit and Live Integration Tests (English, Pure Python 3 Standard Library).
+Dune: Awakening - Automated Test Suite for dune_net.py (Version 2.1.2)
+Unit and Live Integration Tests with ANSI colors and crash guard.
 """
 
 import ipaddress
 import os
-import subprocess
 import sys
 import unittest
 from typing import List
 
-# Import business logic directly from the main engine
+# Enable Virtual Terminal Processing for ANSI colors on Windows console
+if sys.platform == "win32":
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
+
+
+class Color:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    GRAY = "\033[90m"
+
+
 try:
     import dune_net
 except ImportError:
-    print("[-] CRITICAL: 'dune_net.py' must be in the same directory as this test runner.")
+    print(f"{Color.RED}[-] CRITICAL: 'dune_net.py' must be in the same directory.{Color.RESET}")
     sys.exit(1)
+
+
+class ColoredTestResult(unittest.TextTestResult):
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        if self.showAll:
+            self.stream.writeln(f"{Color.GREEN}PASS{Color.RESET}")
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        if self.showAll:
+            self.stream.writeln(f"{Color.RED}ERROR{Color.RESET}")
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        if self.showAll:
+            self.stream.writeln(f"{Color.RED}FAIL{Color.RESET}")
+
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        if self.showAll:
+            self.stream.writeln(f"{Color.YELLOW}SKIP{Color.RESET}")
+
+
+class ColoredTestRunner(unittest.TextTestRunner):
+    resultclass = ColoredTestResult
 
 
 class TestDuneNetUnit(unittest.TestCase):
@@ -25,12 +69,12 @@ class TestDuneNetUnit(unittest.TestCase):
         """Ensure multicast and broadcast addresses are never accepted as valid VM targets."""
         host_net = ipaddress.IPv4Network("192.168.1.0/24")
         test_candidates = [
-            "239.255.255.250",  # SSDP Multicast
-            "255.255.255.255",  # Global Broadcast
-            "192.168.1.255",    # Subnet Broadcast
-            "192.168.1.0",      # Subnet Network ID
-            "192.168.1.33",     # Host PC IP
-            "192.168.1.57"      # Legitimate VM IP
+            "239.255.255.250",
+            "255.255.255.255",
+            "192.168.1.255",
+            "192.168.1.0",
+            "192.168.1.33",
+            "192.168.1.57"
         ]
 
         valid_ips: List[str] = []
@@ -56,17 +100,6 @@ class TestDuneNetUnit(unittest.TestCase):
 
         self.assertTrue(same_subnet_vm in host_net)
         self.assertFalse(different_subnet_vm in host_net)
-
-    def test_port_rule_contract_structure(self):
-        """Ensure PortForwardRule models generate expected contract parameters."""
-        udp_rule = dune_net.PortForwardRule(
-            protocol="udp",
-            destination_port="7777:7810",
-            target_ip="192.168.1.57",
-            is_multiport=True
-        )
-        self.assertEqual(udp_rule.protocol, "udp")
-        self.assertTrue(udp_rule.is_multiport)
 
 
 class TestDuneNetLive(unittest.TestCase):
@@ -97,47 +130,48 @@ class TestDuneNetLive(unittest.TestCase):
         self.assertEqual(code, 0, f"SSH/Sudo authentication failed: {out}")
         self.assertIn("iptables", out)
 
-    def test_live_iptables_dnat_and_hairpin_chains(self):
-        """Verify presence of DUNE-NAT, DUNE-POST hooks, DNAT mappings, and RETURN guard rules."""
+    def test_live_iptables_game_dnat_and_hairpin(self):
+        """Verify DUNE-NAT hooks, UDP game port DNAT, and scoped UDP Hairpin SNAT."""
         ssh = dune_net.SshExecutor(self.ctx.vm_user, self.ctx.vm_ip)
         code, dump = ssh.run("sudo iptables -t nat -S")
         self.assertEqual(code, 0, f"Failed to dump iptables nat table: {dump}")
 
         lines = [line.strip() for line in dump.splitlines()]
 
-        # Check chain hooks
         self.assertTrue(any(l.startswith("-A PREROUTING") and "-j DUNE-NAT" in l for l in lines), "DUNE-NAT hook missing in PREROUTING")
         self.assertTrue(any(l.startswith("-A POSTROUTING") and "-j DUNE-POST" in l for l in lines), "DUNE-POST hook missing in POSTROUTING")
 
-        # Check port forwarding
         self.assertTrue(
-            any("-A DUNE-NAT" in l and f"-d {self.ctx.public_ip}" in l and "7777:7810" in l and f"--to-destination {self.ctx.vm_ip}" in l for l in lines),
+            any("-A DUNE-NAT" in l and f"-d {self.ctx.public_ip}" in l and "-p udp" in l and self.ctx.game_udp_ports in l and f"--to-destination {self.ctx.vm_ip}" in l for l in lines),
             "UDP game port DNAT rule missing in DUNE-NAT"
         )
-        self.assertTrue(
-            any("-A DUNE-NAT" in l and f"-d {self.ctx.public_ip}" in l and "30000:32767" in l and f"--to-destination {self.ctx.vm_ip}" in l for l in lines),
-            "TCP node port DNAT rule missing in DUNE-NAT"
-        )
 
-        # Check Hairpin SNAT
         if self.ctx.is_same_subnet:
             has_return = any(f"-A DUNE-POST -s {self.ctx.vm_ip}/32 -j RETURN" in l or f"-A DUNE-POST -s {self.ctx.vm_ip} -j RETURN" in l for l in lines)
-            has_masq = any("-A DUNE-POST" in l and f"-s {self.ctx.subnet_cidr}" in l and f"-d {self.ctx.vm_ip}" in l and "-j MASQUERADE" in l for l in lines)
+            has_masq = any("-A DUNE-POST" in l and f"-s {self.ctx.subnet_cidr}" in l and f"-d {self.ctx.vm_ip}" in l and "-p udp" in l and "-j MASQUERADE" in l for l in lines)
             self.assertTrue(has_return, "Loopback prevention guard (-j RETURN) missing in DUNE-POST")
-            self.assertTrue(has_masq, "Hairpin MASQUERADE rule missing in DUNE-POST")
+            self.assertTrue(has_masq, "UDP Hairpin MASQUERADE rule missing in DUNE-POST")
 
 
 def main():
-    print("===================================================")
-    print("  Dune: Awakening - Verification & Test Suite      ")
-    print("===================================================\n")
-    runner = unittest.TextTestRunner(verbosity=2)
+    print(f"{Color.CYAN}==================================================={Color.RESET}")
+    print(f"{Color.CYAN}  Dune: Awakening - Verification & Test Suite      {Color.RESET}")
+    print(f"{Color.CYAN}==================================================={Color.RESET}\n")
+
     suite = unittest.TestSuite()
     suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestDuneNetUnit))
     suite.addTest(unittest.TestLoader().loadTestsFromTestCase(TestDuneNetLive))
+
+    runner = ColoredTestRunner(verbosity=2)
     result = runner.run(suite)
     sys.exit(0 if result.wasSuccessful() else 1)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\n{Color.RED}[-] Unhandled exception during testing: {e}{Color.RESET}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
