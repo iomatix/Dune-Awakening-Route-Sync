@@ -1,7 +1,9 @@
 {
-    "schema_version":  "1.0.0",
-    "vm_ip":  "",
-    "pc_ip":  "",
-    "vm_user":  "dune",
-    "switch_name":  "vEthernet (DuneAwakeningServerSwitch)"
+    "schema_version": "2.0.0",
+    "vm_user": "dune",
+    "vm_ip": "",
+    "pc_ip": "",
+    "switch_name": "",
+    "game_udp_ports": "7777:7810",
+    "node_tcp_ports": "30000:32767"
 }

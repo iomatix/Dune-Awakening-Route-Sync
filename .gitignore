@@ -1,8 +1,25 @@
+# 1. Ignore everything by default
 /*
 
+# 2. Whitelist repository configurations and essential project files
 !.gitignore
-!Setup-DuneHost.bat
-!Initialize-DuneHost.ps1
-!Run-DuneRoute.bat
-!Update-DuneRoute.ps1
+!README.md
 !config.json
+
+# 3. Whitelist generalized Python network engine and test suite
+!dune_net.py
+!test_dune_net.py
+
+# 4. Whitelist batch execution runners
+!dune_runner.bat
+!run_tests.bat
+
+# 5. Explicitly ignore Python runtime artifacts in case of subfolder inclusions
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
