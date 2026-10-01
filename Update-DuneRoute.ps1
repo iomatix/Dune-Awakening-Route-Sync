@@ -118,7 +118,7 @@ if ($StaleRoutes) {
 $ExistingRoute = Get-NetRoute -DestinationPrefix "$PublicIp/32" -NextHop $VmIp -ErrorAction SilentlyContinue
 if (-not $ExistingRoute) {
     Write-Host "[+] Adding route: $PublicIp/32 ->$VmIp" -ForegroundColor Green
-    New-NetRoute -DestinationPrefix "$PublicIp/32" -InterfaceAlias $SwitchAlias -NextHop$VmIp | Out-Null
+    New-NetRoute -DestinationPrefix "$PublicIp/32" -InterfaceAlias $SwitchAlias -NextHop $VmIp | Out-Null
 } else {
     Write-Host "[+] Route already up to date: $PublicIp/32 ->$VmIp" -ForegroundColor Green
 }
