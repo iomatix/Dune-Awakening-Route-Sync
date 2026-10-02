@@ -1,6 +1,6 @@
 """
-Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.2.0)
-Self-contained, deterministic topology, Hyper-V lifecycle handling, and readiness polling.
+Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.4.0)
+Self-contained, deterministic topology, Hyper-V lifecycle handling, and strict L4 Kube-Proxy Hairpin NAT.
 """
 
 import argparse
@@ -67,7 +67,6 @@ class TopologyContext:
 class VmLifecycleManager:
     @staticmethod
     def get_vm_state() -> Tuple[Optional[str], Optional[str]]:
-        """Queries Hyper-V subsystem for VM Name and State."""
         ps_cmd = (
             "Get-VM -ErrorAction SilentlyContinue | "
             "Where-Object { $_.Name -like '*Dune*' -or $_.NetworkAdapters.SwitchName -like '*Dune*' } | "
@@ -80,7 +79,6 @@ class VmLifecycleManager:
 
     @classmethod
     def handle_offline_vm(cls, vm_name: Optional[str], state: Optional[str]) -> bool:
-        """Guides user when VM is not running and offers to launch battlegroup.bat."""
         name_str = vm_name or "Dune Awakening Dedicated Server"
         state_str = state or "Off"
 
@@ -111,7 +109,7 @@ class NetworkDiscovery:
     @staticmethod
     def query_public_ip() -> str:
         url = "https://api.ipify.org"
-        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.2"})
+        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.4"})
         with urllib.request.urlopen(req, timeout=5) as response:
             return response.read().decode("utf-8").strip()
 
@@ -219,7 +217,6 @@ class NetworkDiscovery:
 
     @classmethod
     def wait_for_vm_readiness(cls, switch_name: str, host_ip: str, host_net: ipaddress.IPv4Network, timeout_sec: int = 25) -> Optional[str]:
-        """Polls for VM IP and SSH port availability during startup."""
         print_info("Waiting for VM network initialization and SSH daemon...")
         start_time = time.time()
         while time.time() - start_time < timeout_sec:
@@ -234,7 +231,6 @@ class NetworkDiscovery:
 
     @classmethod
     def build_context(cls, config_path: str) -> Optional[TopologyContext]:
-        # 1. Inspect Hyper-V State First
         vm_name, vm_state = VmLifecycleManager.get_vm_state()
         if vm_state and vm_state.lower() not in ["running", "2"]:
             VmLifecycleManager.handle_offline_vm(vm_name, vm_state)
@@ -261,7 +257,6 @@ class NetworkDiscovery:
 
         host_net = ipaddress.IPv4Network(f"{pc_ip}/{prefix_len}", strict=False)
 
-        # 2. Resolve or wait for VM IP
         vm_ip = configured_vm_ip or cls.resolve_vm_ip(switch_alias, pc_ip, host_net)
         if not vm_ip or not cls.check_ssh_port(vm_ip):
             vm_ip = cls.wait_for_vm_readiness(switch_alias, pc_ip, host_net, timeout_sec=20)
@@ -270,13 +265,12 @@ class NetworkDiscovery:
             raise RuntimeError(f"VM network adapter on switch '{switch_alias}' is unreachable or SSH is offline.")
 
         public_ip = cls.query_public_ip()
-
         vm_obj = ipaddress.IPv4Address(vm_ip)
         is_same_subnet = vm_obj in host_net
         subnet_cidr = str(host_net)
 
         game_ports = config.get("game_udp_ports") or "7777:7810"
-        node_ports = config.get("node_tcp_ports") or "30000:32767"
+        node_ports = config.get("node_tcp_ports") or "10000:32767"
 
         return TopologyContext(
             public_ip=public_ip,
@@ -365,9 +359,10 @@ class LinuxNatManager:
         for line in dump.splitlines():
             line = line.strip()
             if line.startswith("-A POSTROUTING") and "DUNE-POST" not in line:
-                if any(x in line for x in ["7777:7810", self.ctx.vm_ip, self.ctx.subnet_cidr]):
+                if any(x in line for x in [self.ctx.vm_ip, self.ctx.subnet_cidr]):
                     cleanup_commands.append(f"sudo iptables -t nat -D {line[3:]}")
 
+        # PREROUTING: DNAT ONLY UDP Game Ports (K3s Kube-Proxy must handle TCP NodePorts directly)
         chain_commands = [
             "sudo iptables -t nat -N DUNE-NAT 2>/dev/null || true",
             "sudo iptables -t nat -F DUNE-NAT",
@@ -378,11 +373,15 @@ class LinuxNatManager:
             f"sudo iptables -t nat -A DUNE-NAT -d {self.ctx.public_ip} -p udp -m multiport --dports {self.ctx.game_udp_ports} -j DNAT --to-destination {self.ctx.vm_ip}"
         ]
 
+        # POSTROUTING: Both UDP and TCP must be Hairpin-masqueraded back to L2 LAN
         if self.ctx.is_same_subnet:
-            print_success(f"L2 topology detected ({self.ctx.subnet_cidr}). Injecting self-loopback protected UDP SNAT.")
+            print_success(f"L2 topology detected ({self.ctx.subnet_cidr}). Injecting self-loopback protected UDP+TCP SNAT.")
             chain_commands.append(f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.vm_ip} -j RETURN")
             chain_commands.append(
                 f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.subnet_cidr} -d {self.ctx.vm_ip} -p udp -m multiport --dports {self.ctx.game_udp_ports} -j MASQUERADE"
+            )
+            chain_commands.append(
+                f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.subnet_cidr} -p tcp -m multiport --dports {self.ctx.node_tcp_ports} -j MASQUERADE"
             )
         else:
             print_info(f"L3 routed topology detected (Host {self.ctx.pc_ip} outside VM subnet {self.ctx.subnet_cidr}). Hairpin SNAT omitted.")
@@ -414,7 +413,7 @@ class VerificationSuite:
     @staticmethod
     def verify(ctx: TopologyContext) -> bool:
         print(f"\n{Color.CYAN}==================================================={Color.RESET}")
-        print(f"{Color.CYAN}  Dune: Awakening - Verification Suite (English)   {Color.RESET}")
+        print(f"{Color.CYAN}  Dune: Awakening - Verification Suite (v2.4.0)    {Color.RESET}")
         print(f"{Color.CYAN}==================================================={Color.RESET}\n")
 
         assertions: List[Tuple[str, str, bool, str]] = []
@@ -451,24 +450,23 @@ class VerificationSuite:
             assertions.append(("iptables PREROUTING", "Chain hook: PREROUTING -> DUNE-NAT", hook_pre, "Hook present" if hook_pre else "Missing hook"))
             assertions.append(("iptables POSTROUTING", "Chain hook: POSTROUTING -> DUNE-POST", hook_post, "Hook present" if hook_post else "Missing hook"))
 
-            dnat_match = any(
+            dnat_udp = any(
                 "-A DUNE-NAT" in l and f"-d {ctx.public_ip}" in l and "-p udp" in l and ctx.game_udp_ports in l and f"--to-destination {ctx.vm_ip}" in l
                 for l in lines
             )
-            assertions.append((
-                "iptables DNAT",
-                f"Forward UDP {ctx.game_udp_ports} to {ctx.vm_ip}",
-                dnat_match,
-                "Rule verified" if dnat_match else "Rule missing or parameters mismatched"
-            ))
+            assertions.append(("iptables UDP DNAT", f"Forward UDP {ctx.game_udp_ports} to {ctx.vm_ip}", dnat_udp, "Verified" if dnat_udp else "Missing UDP DNAT"))
+
+            # Ensure no conflicting TCP DNAT exists
+            no_tcp_dnat = not any("-A DUNE-NAT" in l and "-p tcp" in l and "-j DNAT" in l for l in lines)
+            assertions.append(("iptables TCP Transparency", "Bypass TCP DNAT for Kube-Proxy NodePorts", no_tcp_dnat, "Clean" if no_tcp_dnat else "Conflicting TCP DNAT found"))
 
             if ctx.is_same_subnet:
                 return_rule = any(f"-A DUNE-POST -s {ctx.vm_ip}/32 -j RETURN" in l or f"-A DUNE-POST -s {ctx.vm_ip} -j RETURN" in l for l in lines)
-                masq_rule = any("-A DUNE-POST" in l and f"-s {ctx.subnet_cidr}" in l and f"-d {ctx.vm_ip}" in l and "-p udp" in l and "-j MASQUERADE" in l for l in lines)
-                snat_ok = return_rule and masq_rule
-                assertions.append(("iptables Hairpin", "Scoped UDP SNAT (RETURN Guard & MASQUERADE)", snat_ok, "Rules verified" if snat_ok else "Missing guard or MASQUERADE rule"))
-            else:
-                assertions.append(("iptables Hairpin", "Bypass L2 SNAT (Routed L3 topology)", True, "Omitted intentionally"))
+                masq_udp = any("-A DUNE-POST" in l and f"-s {ctx.subnet_cidr}" in l and f"-d {ctx.vm_ip}" in l and "-p udp" in l and "-j MASQUERADE" in l for l in lines)
+                masq_tcp = any("-A DUNE-POST" in l and f"-s {ctx.subnet_cidr}" in l and "-p tcp" in l and ctx.node_tcp_ports in l and "-j MASQUERADE" in l for l in lines)
+                assertions.append(("iptables Hairpin UDP", "MASQUERADE for UDP", masq_udp, "Verified" if masq_udp else "Missing UDP SNAT"))
+                assertions.append(("iptables Hairpin TCP", f"MASQUERADE for TCP {ctx.node_tcp_ports}", masq_tcp, "Verified" if masq_tcp else "Missing TCP SNAT"))
+                assertions.append(("iptables Loopback Guard", "RETURN for self-traffic", return_rule, "Verified" if return_rule else "Missing loopback guard"))
 
         failures = 0
         for component, test, success, details in assertions:
@@ -500,7 +498,6 @@ def main():
     try:
         ctx = NetworkDiscovery.build_context(args.config)
         if ctx is None:
-            # Clean exit handled by VmLifecycleManager (VM is offline)
             sys.exit(0)
         print_success(f"Topology: Public IP={ctx.public_ip}, Host PC={ctx.pc_ip}, VM={ctx.vm_ip}, Subnet={ctx.subnet_cidr} (Same Subnet: {ctx.is_same_subnet})")
     except Exception as e:

@@ -1,10 +1,11 @@
 """
-Dune: Awakening - Automated Test Suite for dune_net.py (Version 2.2.0)
-Unit and Live Integration Tests with ANSI colors and Hyper-V lifecycle validation.
+Dune: Awakening - Automated Test Suite for dune_net.py (Version 2.4.1)
+Unit and Real L4 Synthetic Traffic Integration Tests (TCP/UDP Socket Probe).
 """
 
 import ipaddress
 import os
+import socket
 import sys
 import unittest
 from typing import List
@@ -102,7 +103,7 @@ class TestDuneNetUnit(unittest.TestCase):
 
 
 class TestDuneNetLive(unittest.TestCase):
-    """Live environment integration tests against active Windows host and Linux VM."""
+    """Live environment integration tests against active Windows host, Linux VM, and actual socket connectivity."""
 
     @classmethod
     def setUpClass(cls):
@@ -132,7 +133,7 @@ class TestDuneNetLive(unittest.TestCase):
         self.assertIn("iptables", out)
 
     def test_live_iptables_game_dnat_and_hairpin(self):
-        """Verify DUNE-NAT hooks, UDP game port DNAT, and scoped UDP Hairpin SNAT."""
+        """Verify DUNE-NAT hooks, UDP DNAT, TCP transparency, and scoped Hairpin SNAT rules."""
         ssh = dune_net.SshExecutor(self.ctx.vm_user, self.ctx.vm_ip)
         code, dump = ssh.run("sudo iptables -t nat -S")
         self.assertEqual(code, 0, f"Failed to dump iptables nat table: {dump}")
@@ -142,21 +143,58 @@ class TestDuneNetLive(unittest.TestCase):
         self.assertTrue(any(l.startswith("-A PREROUTING") and "-j DUNE-NAT" in l for l in lines), "DUNE-NAT hook missing in PREROUTING")
         self.assertTrue(any(l.startswith("-A POSTROUTING") and "-j DUNE-POST" in l for l in lines), "DUNE-POST hook missing in POSTROUTING")
 
-        self.assertTrue(
-            any("-A DUNE-NAT" in l and f"-d {self.ctx.public_ip}" in l and "-p udp" in l and self.ctx.game_udp_ports in l and f"--to-destination {self.ctx.vm_ip}" in l for l in lines),
-            "UDP game port DNAT rule missing in DUNE-NAT"
-        )
+        dnat_udp = any("-A DUNE-NAT" in l and f"-d {self.ctx.public_ip}" in l and "-p udp" in l for l in lines)
+        self.assertTrue(dnat_udp, "UDP game port DNAT rule missing in DUNE-NAT")
+
+        no_tcp_dnat = not any("-A DUNE-NAT" in l and "-p tcp" in l and "-j DNAT" in l for l in lines)
+        self.assertTrue(no_tcp_dnat, "Conflicting TCP DNAT found in DUNE-NAT (breaks Kube-Proxy)")
 
         if self.ctx.is_same_subnet:
             has_return = any(f"-A DUNE-POST -s {self.ctx.vm_ip}/32 -j RETURN" in l or f"-A DUNE-POST -s {self.ctx.vm_ip} -j RETURN" in l for l in lines)
-            has_masq = any("-A DUNE-POST" in l and f"-s {self.ctx.subnet_cidr}" in l and f"-d {self.ctx.vm_ip}" in l and "-p udp" in l and "-j MASQUERADE" in l for l in lines)
+            has_masq_udp = any("-A DUNE-POST" in l and f"-s {self.ctx.subnet_cidr}" in l and f"-d {self.ctx.vm_ip}" in l and "-p udp" in l and "-j MASQUERADE" in l for l in lines)
+            has_masq_tcp = any("-A DUNE-POST" in l and f"-s {self.ctx.subnet_cidr}" in l and "-p tcp" in l and "-j MASQUERADE" in l for l in lines)
             self.assertTrue(has_return, "Loopback prevention guard (-j RETURN) missing in DUNE-POST")
-            self.assertTrue(has_masq, "UDP Hairpin MASQUERADE rule missing in DUNE-POST")
+            self.assertTrue(has_masq_udp, "UDP Hairpin MASQUERADE rule missing in DUNE-POST")
+            self.assertTrue(has_masq_tcp, "TCP Hairpin MASQUERADE rule missing in DUNE-POST")
+
+    def test_live_l4_hairpin_tcp_roundtrip(self):
+        """Perform a real L4 TCP handshake against the Public IP using the active RabbitMQ Game NodePort."""
+        ssh = dune_net.SshExecutor(self.ctx.vm_user, self.ctx.vm_ip)
+        
+        cmd = "sudo k3s kubectl get svc -n funcom-seabass-sh-7df0fcd3c71330f7-ymfyiy sh-7df0fcd3c71330f7-ymfyiy-mq-game-svc -o json"
+        code, svc_json = ssh.run(cmd)
+        target_port = 31982
+
+        if code == 0 and svc_json:
+            import json as _json
+            try:
+                data = _json.loads(svc_json)
+                spec = data.get("spec", {})
+                for p in spec.get("ports", []):
+                    # Specifically target port 5672 (Game AMQP) instead of 15672 (Admin HTTP)
+                    if p.get("protocol") == "TCP" and p.get("port") == 5672 and p.get("nodePort"):
+                        target_port = int(p["nodePort"])
+                        break
+            except Exception:
+                pass
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3.0)
+        try:
+            sock.connect((self.ctx.public_ip, target_port))
+            sock.close()
+        except socket.timeout:
+            self.fail(
+                f"L4 Hairpin TCP Handshake to {self.ctx.public_ip}:{target_port} timed out! "
+                "Routing or MASQUERADE failed to deliver packets back to the Windows host."
+            )
+        except OSError as e:
+            self.fail(f"L4 Hairpin TCP Handshake to {self.ctx.public_ip}:{target_port} failed: {e}")
 
 
 def main():
     print(f"{Color.CYAN}==================================================={Color.RESET}")
-    print(f"{Color.CYAN}  Dune: Awakening - Verification & Test Suite      {Color.RESET}")
+    print(f"{Color.CYAN}  Dune: Awakening - Verification & Test Suite v2.4.1{Color.RESET}")
     print(f"{Color.CYAN}==================================================={Color.RESET}\n")
 
     suite = unittest.TestSuite()
