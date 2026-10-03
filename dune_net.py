@@ -1,12 +1,13 @@
 """
-Dune: Awakening - Generalized Network Routing & NAT Engine (Version 2.4.0)
-Self-contained, deterministic topology, Hyper-V lifecycle handling, and strict L4 Kube-Proxy Hairpin NAT.
+Dune: Awakening - Generalized Network Routing, NAT & Cluster Sync Engine (Version 2.5.0)
+Deterministic topology, Hyper-V lifecycle handling, strict L4 Hairpin NAT, and automated K3s IP Synchronization.
 """
 
 import argparse
 import ipaddress
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -62,6 +63,9 @@ class TopologyContext:
     subnet_cidr: str
     game_udp_ports: str
     node_tcp_ports: str
+    settings_file: str
+    k8s_namespace: Optional[str] = None
+    k8s_gateway_deploy: Optional[str] = None
 
 
 class VmLifecycleManager:
@@ -90,7 +94,6 @@ class VmLifecycleManager:
         print(f"  {Color.GRAY}* Note: If players cannot see server, verify updates using: '5. update'{Color.RESET}\n")
 
         battlegroup_bat = os.path.join(os.path.dirname(os.path.abspath(__file__)), "battlegroup.bat")
-        
         try:
             choice = input(f"{Color.CYAN}[?] Launch battlegroup.bat now to manage VM? (Y/N): {Color.RESET}").strip()
             if choice.lower() == 'y':
@@ -106,12 +109,24 @@ class VmLifecycleManager:
 
 
 class NetworkDiscovery:
-    @staticmethod
-    def query_public_ip() -> str:
-        url = "https://api.ipify.org"
-        req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.4"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            return response.read().decode("utf-8").strip()
+    RESOLVERS = [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com"
+    ]
+
+    @classmethod
+    def query_public_ip(cls) -> str:
+        for url in cls.RESOLVERS:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "DuneNetEngine/2.5"})
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    candidate = response.read().decode("utf-8").strip()
+                    ipaddress.IPv4Address(candidate)
+                    return candidate
+            except Exception:
+                continue
+        raise RuntimeError("Failed to resolve public IPv4 address through all configured resolvers.")
 
     @staticmethod
     def run_powershell_json(script: str) -> Any:
@@ -248,6 +263,7 @@ class NetworkDiscovery:
         preferred_switch = config.get("switch_name") or ""
         configured_vm_ip = config.get("vm_ip") or ""
         configured_pc_ip = config.get("pc_ip") or ""
+        settings_file = config.get("settings_file") or "/home/dune/.dune/settings.conf"
 
         switch_alias, pc_ip, prefix_len = cls.resolve_host_interface(preferred_switch)
         if configured_pc_ip:
@@ -281,7 +297,8 @@ class NetworkDiscovery:
             is_same_subnet=is_same_subnet,
             subnet_cidr=subnet_cidr,
             game_udp_ports=game_ports,
-            node_tcp_ports=node_ports
+            node_tcp_ports=node_ports,
+            settings_file=settings_file
         )
 
 
@@ -341,6 +358,123 @@ class RouteManager:
         ps_del = f"Get-NetRoute -DestinationPrefix '{ctx.public_ip}/32' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false"
         subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_del], capture_output=True)
 
+class ClusterSyncManager:
+    """Orchestrates dynamic public IP discovery and propagation to K3s & Dune Game Server."""
+
+    def __init__(self, ctx: TopologyContext):
+        self.ctx = ctx
+        self.ssh = SshExecutor(ctx.vm_user, ctx.vm_ip)
+
+    def read_configured_external_ip(self) -> Optional[str]:
+        cmd = f"sed -n '4p' {self.ctx.settings_file} 2>/dev/null"
+        code, out = self.ssh.run(cmd)
+        if code == 0 and out.strip():
+            candidate = out.strip().splitlines()[-1]
+            try:
+                ipaddress.IPv4Address(candidate)
+                return candidate
+            except ValueError:
+                return candidate
+        return None
+
+    def discover_k8s_resources(self):
+        cmd = "sudo k3s kubectl get namespaces -o json"
+        code, out = self.ssh.run(cmd)
+        if code == 0:
+            try:
+                data = json.loads(out)
+                for item in data.get("items", []):
+                    ns_name = item.get("metadata", {}).get("name", "")
+                    if ns_name.startswith("funcom-seabass-"):
+                        self.ctx.k8s_namespace = ns_name
+                        break
+            except Exception:
+                pass
+
+        if self.ctx.k8s_namespace:
+            cmd_deploy = f"sudo k3s kubectl get deployments -n {self.ctx.k8s_namespace} -o json"
+            code, out_dep = self.ssh.run(cmd_deploy)
+            if code == 0:
+                try:
+                    data = json.loads(out_dep)
+                    for item in data.get("items", []):
+                        d_name = item.get("metadata", {}).get("name", "")
+                        if "sgw-deploy" in d_name:
+                            self.ctx.k8s_gateway_deploy = d_name
+                            break
+                except Exception:
+                    pass
+
+    def synchronize_cluster_ip(self, target_ip: str) -> bool:
+        configured_ip = self.read_configured_external_ip()
+        if configured_ip == target_ip:
+            print_success(f"Cluster external IP is consistent with WAN ({target_ip}). No cluster restart required.")
+            return True
+
+        print_warning(f"WAN IP change detected: Cluster={configured_ip} -> Actual WAN={target_ip}")
+        print_info(f"Atomically updating {self.ctx.settings_file}...")
+
+        update_cmd = (
+            f"sh -c \""
+            f"file='{self.ctx.settings_file}'; "
+            f"tmp='{self.ctx.settings_file}.tmp'; "
+            f"l1=\\$(sed -n '1p' \\$file 2>/dev/null); "
+            f"l2=\\$(sed -n '2p' \\$file 2>/dev/null); "
+            f"l3=\\$(sed -n '3p' \\$file 2>/dev/null); "
+            f"printf '%s\\n%s\\n%s\\n{target_ip}\\n' \\\"\\$l1\\\" \\\"\\$l2\\\" \\\"\\$l3\\\" > \\$tmp && "
+            f"mv \\$tmp \\$file\""
+        )
+        code, out = self.ssh.run(update_cmd)
+        if code != 0:
+            print_error(f"Failed to update settings file: {out}")
+            return False
+
+        print_info("Restarting K3s service to update node external IP...")
+        code, out = self.ssh.run("sudo rc-service k3s restart")
+        if code != 0:
+            print_error(f"Failed to restart K3s: {out}")
+            return False
+
+        print_info("Waiting for K3s node external IP to register...")
+        node_synced = False
+        for _ in range(15):
+            time.sleep(2)
+            code, out = self.ssh.run("sudo k3s kubectl get node -o json")
+            if code == 0:
+                try:
+                    data = json.loads(out)
+                    items = data.get("items", [])
+                    if items:
+                        addresses = items[0].get("status", {}).get("addresses", [])
+                        for addr in addresses:
+                            if addr.get("type") == "ExternalIP" and addr.get("address") == target_ip:
+                                node_synced = True
+                                break
+                except Exception:
+                    pass
+            if node_synced:
+                break
+
+        if not node_synced:
+            print_warning("K3s node did not register new ExternalIP within timeout. Proceeding with pod refresh.")
+        else:
+            print_success(f"K3s node updated successfully: ExternalIP={target_ip}")
+
+        self.discover_k8s_resources()
+        if not self.ctx.k8s_namespace:
+            print_warning("Battlegroup namespace not found yet. Skipping pod restarts.")
+            return True
+
+        if self.ctx.k8s_gateway_deploy:
+            print_info(f"Restarting Gateway Deployment ({self.ctx.k8s_gateway_deploy})...")
+            self.ssh.run(f"sudo k3s kubectl rollout restart deployment {self.ctx.k8s_gateway_deploy} -n {self.ctx.k8s_namespace}")
+
+        print_info("Cycling game server pods to ensure re-registration in PostgreSQL...")
+        self.ssh.run(
+            f"sudo k3s kubectl get pods -n {self.ctx.k8s_namespace} -o name | "
+            f"grep -E 'sg-survival|sg-overmap' | xargs -r sudo k3s kubectl delete -n {self.ctx.k8s_namespace} --wait=false"
+        )
+        return True
 
 class LinuxNatManager:
     def __init__(self, ctx: TopologyContext):
@@ -362,7 +496,6 @@ class LinuxNatManager:
                 if any(x in line for x in [self.ctx.vm_ip, self.ctx.subnet_cidr]):
                     cleanup_commands.append(f"sudo iptables -t nat -D {line[3:]}")
 
-        # PREROUTING: DNAT ONLY UDP Game Ports (K3s Kube-Proxy must handle TCP NodePorts directly)
         chain_commands = [
             "sudo iptables -t nat -N DUNE-NAT 2>/dev/null || true",
             "sudo iptables -t nat -F DUNE-NAT",
@@ -373,7 +506,6 @@ class LinuxNatManager:
             f"sudo iptables -t nat -A DUNE-NAT -d {self.ctx.public_ip} -p udp -m multiport --dports {self.ctx.game_udp_ports} -j DNAT --to-destination {self.ctx.vm_ip}"
         ]
 
-        # POSTROUTING: Both UDP and TCP must be Hairpin-masqueraded back to L2 LAN
         if self.ctx.is_same_subnet:
             print_success(f"L2 topology detected ({self.ctx.subnet_cidr}). Injecting self-loopback protected UDP+TCP SNAT.")
             chain_commands.append(f"sudo iptables -t nat -A DUNE-POST -s {self.ctx.vm_ip} -j RETURN")
@@ -413,7 +545,7 @@ class VerificationSuite:
     @staticmethod
     def verify(ctx: TopologyContext) -> bool:
         print(f"\n{Color.CYAN}==================================================={Color.RESET}")
-        print(f"{Color.CYAN}  Dune: Awakening - Verification Suite (v2.4.0)    {Color.RESET}")
+        print(f"{Color.CYAN}  Dune: Awakening - Verification Suite (v2.5.0)    {Color.RESET}")
         print(f"{Color.CYAN}==================================================={Color.RESET}\n")
 
         assertions: List[Tuple[str, str, bool, str]] = []
@@ -456,7 +588,6 @@ class VerificationSuite:
             )
             assertions.append(("iptables UDP DNAT", f"Forward UDP {ctx.game_udp_ports} to {ctx.vm_ip}", dnat_udp, "Verified" if dnat_udp else "Missing UDP DNAT"))
 
-            # Ensure no conflicting TCP DNAT exists
             no_tcp_dnat = not any("-A DUNE-NAT" in l and "-p tcp" in l and "-j DNAT" in l for l in lines)
             assertions.append(("iptables TCP Transparency", "Bypass TCP DNAT for Kube-Proxy NodePorts", no_tcp_dnat, "Clean" if no_tcp_dnat else "Conflicting TCP DNAT found"))
 
@@ -467,6 +598,17 @@ class VerificationSuite:
                 assertions.append(("iptables Hairpin UDP", "MASQUERADE for UDP", masq_udp, "Verified" if masq_udp else "Missing UDP SNAT"))
                 assertions.append(("iptables Hairpin TCP", f"MASQUERADE for TCP {ctx.node_tcp_ports}", masq_tcp, "Verified" if masq_tcp else "Missing TCP SNAT"))
                 assertions.append(("iptables Loopback Guard", "RETURN for self-traffic", return_rule, "Verified" if return_rule else "Missing loopback guard"))
+
+        # Cluster IP Consistency Assertion
+        sync_mgr = ClusterSyncManager(ctx)
+        configured_ip = sync_mgr.read_configured_external_ip()
+        cluster_ip_ok = (configured_ip == ctx.public_ip)
+        assertions.append((
+            "Cluster IP Consistency",
+            f"settings.conf External IP matches WAN ({ctx.public_ip})",
+            cluster_ip_ok,
+            f"Cluster IP: {configured_ip}" if cluster_ip_ok else f"Mismatch: settings.conf={configured_ip} vs WAN={ctx.public_ip}"
+        ))
 
         failures = 0
         for component, test, success, details in assertions:
@@ -504,12 +646,14 @@ def main():
         print_error(f"Discovery initialization failure: {e}")
         sys.exit(1)
 
+    cluster_mgr = ClusterSyncManager(ctx)
     nat_mgr = LinuxNatManager(ctx)
 
     if args.action == "sync":
+        c_ok = cluster_mgr.synchronize_cluster_ip(ctx.public_ip)
         w_ok = RouteManager.sync_windows_route(ctx)
         l_ok = nat_mgr.sanitize_and_sync()
-        if w_ok and l_ok:
+        if c_ok and w_ok and l_ok:
             print(f"\n{Color.GREEN}[SUCCESS] Synchronization complete.{Color.RESET}")
             sys.exit(0)
         sys.exit(1)

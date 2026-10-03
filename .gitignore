@@ -14,7 +14,13 @@
 !run_dune_net.bat
 !run_tests.bat
 
-# 5. Explicitly ignore Python runtime artifacts in case of subfolder inclusions
+# 5. Local environments & editor
+.venv/
+venv/
+.idea/
+.vscode/
+
+# 6. Explicitly ignore Python runtime artifacts in case of subfolder inclusions
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,3 +29,4 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+*.tmp
