@@ -5,12 +5,14 @@
 !.gitignore
 !README.md
 !config.json
+!config.ops.json
 !pyproject.toml
 
 # 3. Whitelist core network engine and scripts
 !dune_net.py
 !test_dune_net.py
 !run_dune_net.bat
+!run_dune_ops.bat
 !run_tests.bat
 
 # 4. Whitelist operator console and tests

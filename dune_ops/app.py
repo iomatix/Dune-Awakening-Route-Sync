@@ -71,7 +71,6 @@ def init_ui(app_state: DuneOpsApp):
     def main_page():
         ui.colors(primary="#d97706", secondary="#78350f", accent="#f59e0b", dark="#111827")
 
-        # Dynamic reactive labels holder
         labels: Dict[str, ui.label] = {}
 
         # ----------------- HEADER -----------------
@@ -121,7 +120,7 @@ def init_ui(app_state: DuneOpsApp):
                         f"{app_state.i18n.t('players.no_players_online') if not app_state.players else f'Online: {len(app_state.players)}'}"
                     ).classes("text-stone-300 text-sm")
                     ui.button(
-                        label=app_state.i18n.t("nav.refresh"),
+                        app_state.i18n.t("nav.refresh"),
                         icon="refresh",
                         on_click=lambda: on_refresh_player_view(),
                     ).props("outline color=amber")
@@ -183,7 +182,7 @@ def init_ui(app_state: DuneOpsApp):
                             with ui.row().classes("w-full items-center gap-4 mt-2"):
                                 qty_input = ui.number(label=app_state.i18n.t("console.quantity"), value=1, min=1, max=1000000).classes("w-32 bg-stone-900")
                                 ui.button(
-                                    label=app_state.i18n.t("console.spawn_button"),
+                                    app_state.i18n.t("console.spawn_button"),
                                     icon="inventory_2",
                                     on_click=lambda: on_quick_spawn(item_input.value, int(qty_input.value or 1)),
                                 ).props("color=amber")
@@ -195,12 +194,12 @@ def init_ui(app_state: DuneOpsApp):
 
                             with ui.row().classes("w-full justify-between mt-2"):
                                 ui.button(
-                                    label=app_state.i18n.t("console.execute"),
+                                    app_state.i18n.t("console.execute"),
                                     icon="play_arrow",
                                     on_click=lambda: on_execute_command(cmd_input.value),
                                 ).props("color=amber")
                                 ui.button(
-                                    label=app_state.i18n.t("console.clear"),
+                                    app_state.i18n.t("console.clear"),
                                     icon="delete_sweep",
                                     on_click=lambda: on_clear_console(),
                                 ).props("flat color=stone")
