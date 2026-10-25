@@ -1,32 +1,40 @@
 # 1. Ignore everything by default
 /*
 
-# 2. Whitelist repository configurations and essential project files
+# 2. Whitelist repository configurations and project files
 !.gitignore
 !README.md
 !config.json
+!pyproject.toml
 
-# 3. Whitelist generalized Python network engine and test suite
+# 3. Whitelist core network engine and scripts
 !dune_net.py
 !test_dune_net.py
-
-# 4. Whitelist batch execution runners
 !run_dune_net.bat
 !run_tests.bat
 
-# 5. Local environments & editor
+# 4. Whitelist operator console and tests
+!dune_ops/
+!dune_ops/**
+!tests/
+!tests/**
+
+# 5. Local environments & IDE
 .venv/
 venv/
 .idea/
 .vscode/
 
-# 6. Explicitly ignore Python runtime artifacts in case of subfolder inclusions
+# 6. Python & Packaging build artifacts
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyd
 *.log
+*.tmp
+*.egg-info/
+build/
+dist/
 .pytest_cache/
 .coverage
 htmlcov/
-*.tmp
