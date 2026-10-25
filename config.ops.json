@@ -1,0 +1,18 @@
+{
+  "$schema_version": "1.1.0",
+  "cluster": {
+    "vm_ip": "192.168.1.57",
+    "ssh_user": "dune",
+    "discovery_interval_sec": 10.0
+  },
+  "ui": {
+    "host": "127.0.0.1",
+    "port": 8090,
+    "default_language": "pl",
+    "theme": "dark"
+  },
+  "catalogs": {
+    "items_db_path": "dune_ops/data/items_catalog.json",
+    "commands_db_path": "dune_ops/data/commands_catalog.json"
+  }
+}
