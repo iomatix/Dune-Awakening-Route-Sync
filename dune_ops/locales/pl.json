@@ -10,7 +10,8 @@
     "tab_console": "Konsola DEV",
     "active_map": "Aktywna mapa:",
     "refresh": "Odśwież",
-    "language": "Język"
+    "language": "Język",
+    "sync_tooltip": "Synchronizuj katalog z bazy PostgreSQL"
   },
   "maps": {
     "status_running": "Działa",
@@ -29,7 +30,9 @@
     "equipped_gear": "Założony ekwipunek",
     "inventory": "Plecak",
     "empty_inventory": "Ekwipunek jest pusty",
-    "no_players_online": "Brak graczy na wybranej mapie"
+    "no_players_online": "Brak graczy na wybranej mapie",
+    "active_players_count": "Aktywni gracze: {count}",
+    "steam_label": "Steam: {steam_id}"
   },
   "console": {
     "target_map": "Docelowa instancja:",
@@ -41,6 +44,21 @@
     "quantity": "Liczba",
     "spawn_button": "Zespawnuj graczowi",
     "output_title": "Dziennik odpowiedzi silnika",
-    "clear": "Wyczyść"
+    "clear": "Wyczyść",
+    "clear_tooltip": "Wyczyść dziennik zdarzeń",
+    "raw_command_title": "Bezpośrednia Komenda Silnika"
+  },
+  "notify": {
+    "sync_in_progress": "Synchronizowanie katalogu z bazy danych...",
+    "sync_success": "Pobrano {count} definicji przedmiotów z bazy!",
+    "sync_failed": "Błąd synchronizacji: {error}",
+    "select_item_first": "Wybierz najpierw przedmiot z listy",
+    "no_active_map": "Nie wybrano aktywnej mapy",
+    "empty_command": "Wprowadzone polecenie jest puste"
+  },
+  "logs": {
+    "catalog_synced": "[KATALOG] {msg}",
+    "catalog_error": "[BŁĄD KATALOGU] {msg}",
+    "map_discovery_error": "[BŁĄD MAP] Nie udało się wykryć map: {error}"
   }
 }

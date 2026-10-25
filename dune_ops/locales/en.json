@@ -10,7 +10,8 @@
     "tab_console": "DEV Console",
     "active_map": "Active Map:",
     "refresh": "Refresh",
-    "language": "Language"
+    "language": "Language",
+    "sync_tooltip": "Sync catalog from PostgreSQL database"
   },
   "maps": {
     "status_running": "Running",
@@ -29,7 +30,9 @@
     "equipped_gear": "Equipped Gear",
     "inventory": "Backpack",
     "empty_inventory": "Inventory is empty",
-    "no_players_online": "No players online on this map"
+    "no_players_online": "No players online on this map",
+    "active_players_count": "Active players: {count}",
+    "steam_label": "Steam: {steam_id}"
   },
   "console": {
     "target_map": "Target Instance:",
@@ -41,6 +44,21 @@
     "quantity": "Quantity",
     "spawn_button": "Spawn to Player",
     "output_title": "Engine Response Log",
-    "clear": "Clear"
+    "clear": "Clear",
+    "clear_tooltip": "Clear response log",
+    "raw_command_title": "Direct Engine Command"
+  },
+  "notify": {
+    "sync_in_progress": "Synchronizing database catalog...",
+    "sync_success": "Synced {count} item definitions from database!",
+    "sync_failed": "Sync failed: {error}",
+    "select_item_first": "Select an item from the list first",
+    "no_active_map": "No active map selected",
+    "empty_command": "Command string cannot be empty"
+  },
+  "logs": {
+    "catalog_synced": "[CATALOG] {msg}",
+    "catalog_error": "[CATALOG ERROR] {msg}",
+    "map_discovery_error": "[MAP ERROR] Map discovery failed: {error}"
   }
 }
