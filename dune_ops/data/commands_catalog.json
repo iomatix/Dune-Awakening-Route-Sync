@@ -1,0 +1,48 @@
+[
+  {
+    "command": "GiveItem",
+    "category": "items",
+    "syntax": "GiveItem <TargetPlayer> <ItemId> <Quantity>",
+    "description_key": "commands.give_item",
+    "parameters": [
+      { "name": "TargetPlayer", "type": "player_id", "required": true },
+      { "name": "ItemId", "type": "item_id", "required": true },
+      { "name": "Quantity", "type": "int", "required": false, "default": "1" }
+    ],
+    "example": "GiveItem Player1 PowerPack5 1"
+  },
+  {
+    "command": "TeleportTo",
+    "category": "teleport",
+    "syntax": "TeleportTo <TargetPlayer> <X> <Y> <Z>",
+    "description_key": "commands.teleport_to",
+    "parameters": [
+      { "name": "TargetPlayer", "type": "player_id", "required": true },
+      { "name": "X", "type": "float", "required": true },
+      { "name": "Y", "type": "float", "required": true },
+      { "name": "Z", "type": "float", "required": true }
+    ],
+    "example": "TeleportTo Player1 19581.0 232845.0 8141.0"
+  },
+  {
+    "command": "KickPlayer",
+    "category": "moderation",
+    "syntax": "KickPlayer <TargetPlayer> [Reason]",
+    "description_key": "commands.kick_player",
+    "parameters": [
+      { "name": "TargetPlayer", "type": "player_id", "required": true },
+      { "name": "Reason", "type": "string", "required": false, "default": "AdminKick" }
+    ],
+    "example": "KickPlayer Player1 Violation"
+  },
+  {
+    "command": "BroadcastMessage",
+    "category": "world",
+    "syntax": "BroadcastMessage <Message>",
+    "description_key": "commands.broadcast",
+    "parameters": [
+      { "name": "Message", "type": "string", "required": true }
+    ],
+    "example": "BroadcastMessage Restart in 10 minutes"
+  }
+]
