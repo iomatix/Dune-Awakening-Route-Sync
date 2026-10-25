@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dune-awakening-tools"
+version = "2.5.0"
+description = "Generalized Network Routing, NAT & Dedicated Server Operator Console for Dune: Awakening"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Mateusz Wypchlak" }
+]
+dependencies = [
+    "nicegui>=2.0.0",
+    "pydantic>=2.8.0",
+    "asyncssh>=2.14.0",
+    "pyyaml>=6.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0"
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v"
+filterwarnings = [
+    "ignore::DeprecationWarning"
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
