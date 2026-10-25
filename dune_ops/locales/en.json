@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Dune: Awakening - Operator Console",
+    "subtitle": "Instance management & DEV console",
+    "status_connected": "CONNECTED",
+    "status_disconnected": "DISCONNECTED"
+  },
+  "nav": {
+    "tab_players": "Players & Inventory",
+    "tab_console": "DEV Console",
+    "active_map": "Active Map:",
+    "refresh": "Refresh",
+    "language": "Language"
+  },
+  "maps": {
+    "status_running": "Running",
+    "status_initializing": "Initializing",
+    "status_stopped": "Stopped",
+    "status_unhealthy": "Unhealthy",
+    "no_active_maps": "No active map instances"
+  },
+  "players": {
+    "col_name": "Character",
+    "col_steam_id": "Steam ID",
+    "col_ping": "Ping",
+    "col_coords": "Coordinates (X, Y, Z)",
+    "col_actions": "Actions",
+    "inspect": "Inspect",
+    "equipped_gear": "Equipped Gear",
+    "inventory": "Backpack",
+    "empty_inventory": "Inventory is empty",
+    "no_players_online": "No players online on this map"
+  },
+  "console": {
+    "target_map": "Target Instance:",
+    "command_placeholder": "Enter command (e.g., giveitem, teleport)...",
+    "execute": "Execute",
+    "history": "Command History",
+    "quick_spawn": "Quick Item Spawner",
+    "item_select": "Select Item",
+    "quantity": "Quantity",
+    "spawn_button": "Spawn to Player",
+    "output_title": "Engine Response Log",
+    "clear": "Clear"
+  }
+}

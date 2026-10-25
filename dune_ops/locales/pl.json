@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Dune: Awakening - Panel Operatorski",
+    "subtitle": "Zarządzanie instancjami i konsola DEV",
+    "status_connected": "POŁĄCZONO",
+    "status_disconnected": "ROZŁĄCZONO"
+  },
+  "nav": {
+    "tab_players": "Gracze i Ekwipunek",
+    "tab_console": "Konsola DEV",
+    "active_map": "Aktywna mapa:",
+    "refresh": "Odśwież",
+    "language": "Język"
+  },
+  "maps": {
+    "status_running": "Działa",
+    "status_initializing": "Inicjalizacja",
+    "status_stopped": "Zatrzymana",
+    "status_unhealthy": "Błąd",
+    "no_active_maps": "Brak aktywnych instancji map"
+  },
+  "players": {
+    "col_name": "Postać",
+    "col_steam_id": "Steam ID",
+    "col_ping": "Ping",
+    "col_coords": "Pozycja (X, Y, Z)",
+    "col_actions": "Akcje",
+    "inspect": "Szczegóły",
+    "equipped_gear": "Założony ekwipunek",
+    "inventory": "Plecak",
+    "empty_inventory": "Ekwipunek jest pusty",
+    "no_players_online": "Brak graczy na wybranej mapie"
+  },
+  "console": {
+    "target_map": "Docelowa instancja:",
+    "command_placeholder": "Wpisz polecenie (np. giveitem, teleport)...",
+    "execute": "Wykonaj",
+    "history": "Historia poleceń",
+    "quick_spawn": "Szybki generator przedmiotów",
+    "item_select": "Wybierz przedmiot",
+    "quantity": "Liczba",
+    "spawn_button": "Zespawnuj graczowi",
+    "output_title": "Dziennik odpowiedzi silnika",
+    "clear": "Wyczyść"
+  }
+}
